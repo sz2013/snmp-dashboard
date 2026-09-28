@@ -73,6 +73,7 @@ CACHE_LOCK = threading.Lock()
 HEALTH_INDEX = {}
 HEALTH_RESOLVED = False
 HEALTH_RETRY_AT = 0.0
+NAMES = {}
 STOP = threading.Event()
 ACC = {}
 ACC_LOCK = threading.Lock()
@@ -138,38 +139,56 @@ async def collect(engine, auth, context, target):
 
     now = time.monotonic()
     resolving = (not HEALTH_RESOLVED) or (not HEALTH_INDEX and now >= HEALTH_RETRY_AT)
-    health_task = resolve_health(engine, auth, target, context) if resolving else read_health(
-        engine, auth, target, context
-    )
 
-    tasks = [get_many(engine, auth, target, context, list(SYS.values()))]
-    tasks += [walk_column(engine, auth, target, context, oid) for oid in COL.values()]
-    tasks.append(health_task)
+    fields = [(k, oid) for k, oid in COL.items() if k != "name"]
+    health_oids = {m: HEALTH_INDEX[m] for m in HEALTH_INDEX}
+    scalar_oids = list(SYS.values()) + ([] if resolving else list(health_oids.values()))
+
+    tasks = [get_many(engine, auth, target, context, scalar_oids)]
+    if resolving:
+        tasks.append(resolve_health(engine, auth, target, context))
+    walk_at = len(tasks)
+    tasks += [walk_column(engine, auth, target, context, oid) for _, oid in fields]
+    name_at = len(tasks)
+    if not NAMES:
+        tasks.append(walk_column(engine, auth, target, context, COL["name"]))
+
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    sys_raw = results[0]
-    if isinstance(sys_raw, Exception):
-        raise sys_raw
-    system = {label: sys_raw.get(oid) for label, oid in SYS.items()}
+    raw = results[0]
+    if isinstance(raw, Exception):
+        raise raw
+    system = {label: raw.get(oid) for label, oid in SYS.items()}
 
-    ports = {}
-    for field, res in zip(COL.keys(), results[1 : 1 + len(COL)]):
-        if isinstance(res, Exception):
-            continue
-        for idx, value in res.items():
-            ports.setdefault(idx, {})[field] = value
-
-    health_res = results[-1]
     health = {}
-    if not isinstance(health_res, Exception):
-        if resolving:
+    if resolving:
+        health_res = results[1]
+        if not isinstance(health_res, Exception):
             resolved, health = health_res
             HEALTH_INDEX.update(resolved)
             HEALTH_RESOLVED = True
             if not resolved:
                 HEALTH_RETRY_AT = time.monotonic() + 300
-        else:
-            health = health_res
+    else:
+        for metric, oid in health_oids.items():
+            num = to_number(raw.get(oid))
+            if num is not None:
+                health[metric] = num
+
+    ports = {}
+    for (field, _), res in zip(fields, results[walk_at:name_at]):
+        if isinstance(res, Exception):
+            continue
+        for idx, value in res.items():
+            ports.setdefault(idx, {})[field] = value
+
+    if not NAMES:
+        name_res = results[name_at]
+        if not isinstance(name_res, Exception):
+            NAMES.update(name_res)
+
+    if ports and any(idx not in NAMES for idx in ports):
+        NAMES.update(await walk_column(engine, auth, target, context, COL["name"]))
 
     return system, ports, health
 
@@ -197,20 +216,6 @@ async def resolve_health(engine, auth, target, context):
     return resolved, values
 
 
-async def read_health(engine, auth, target, context):
-    if not HEALTH_INDEX:
-        return {}
-    metrics = list(HEALTH_INDEX)
-    oids = [HEALTH_INDEX[m] for m in metrics]
-    raw = await get_many(engine, auth, target, context, oids)
-    out = {}
-    for metric, oid in zip(metrics, oids):
-        num = to_number(raw.get(oid))
-        if num is not None:
-            out[metric] = num
-    return out
-
-
 def build_payload(rt, cfg):
     try:
         if rt.get("target") is None:
@@ -230,7 +235,7 @@ def build_payload(rt, cfg):
         dt = (now - prev_ts) if prev_ts else None
         result = []
         for idx, row in ports_raw.items():
-            name = row.get("name", f"if{idx}")
+            name = NAMES.get(idx, f"if{idx}")
             if EXCLUDE_PORTS.match(name):
                 continue
             oper_code = str(row.get("oper", ""))
