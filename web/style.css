@@ -38,7 +38,7 @@ body {
 .title { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
 .title h1 { margin: 0; font-size: 18px; }
 .host { color: var(--accent); font-weight: 600; }
-.meta { color: var(--text); font-size: 14px; }
+.meta { color: var(--text); font-size: 14px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .meta .label { color: var(--muted); margin-right: 6px; }
 
 .controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
@@ -47,7 +47,15 @@ body {
 @media (max-width: 720px) {
   .topbar { flex-direction: column; align-items: stretch; gap: 10px; }
   .title, .controls { flex: 1 1 auto; }
-  .updated { min-width: 0; }
+  .controls { flex-wrap: nowrap; gap: 8px; overflow-x: auto; }
+  .controls .updated { min-width: 0; }
+  .controls .updated,
+  .controls .auto,
+  .controls select,
+  .controls button { font-size: 12px; }
+  .controls .auto { white-space: nowrap; }
+  .controls select,
+  .controls button { padding: 4px 8px; }
 }
 
 select, button {
