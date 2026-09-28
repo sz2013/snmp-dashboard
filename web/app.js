@@ -1,5 +1,4 @@
 const els = {
-  host: document.getElementById("host"),
   dot: document.getElementById("status-dot"),
   updated: document.getElementById("updated"),
   alert: document.getElementById("alert"),
@@ -154,7 +153,6 @@ function render(data) {
 
   els.alert.classList.add("hidden");
   els.dot.className = "dot ok";
-  els.host.textContent = data.host;
   els.updated.textContent = "更新于 " + new Date(data.ts * 1000).toLocaleTimeString();
 
   const h = data.health || {};
