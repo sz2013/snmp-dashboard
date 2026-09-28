@@ -1,0 +1,19 @@
+[Unit]
+Description=SNMP Dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/snmp-dashboard
+EnvironmentFile=/etc/snmp-dashboard.env
+ExecStart=/opt/snmp-dashboard/.venv/bin/python snmp_web.py ${SNMP_HOST} -c ${SNMP_COMMUNITY} -w 8000 --bind 0.0.0.0 -i 2 --record-interval 60 --retain-days 7 --db /var/lib/snmp-dashboard/db/history.db
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/var/lib/snmp-dashboard
+
+[Install]
+WantedBy=multi-user.target

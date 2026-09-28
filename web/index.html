@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>交换机监控</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="title">
+      <h1>交换机监控</h1>
+      <span id="host" class="host">--</span>
+      <span class="meta"><span class="label">名称</span>S5720S-28P-LI-AC</span>
+      <span class="meta"><span class="label">运行时长</span><span id="sysUpTime">--</span></span>
+    </div>
+    <div class="controls">
+      <span id="status-dot" class="dot"></span>
+      <span id="updated" class="updated">未连接</span>
+      <label class="auto"><input type="checkbox" id="auto" checked> 自动刷新</label>
+      <select id="interval">
+        <option value="1000">1s</option>
+        <option value="2000" selected>2s</option>
+        <option value="5000">5s</option>
+        <option value="10000">10s</option>
+      </select>
+      <button id="refresh">刷新</button>
+    </div>
+  </header>
+
+  <div id="alert" class="alert hidden"></div>
+
+  <section class="cards">
+    <div class="card"><div class="card-label">CPU</div><div class="card-value"><span id="cpu">--</span><small>%</small></div></div>
+    <div class="card"><div class="card-label">内存</div><div class="card-value"><span id="mem">--</span><small>%</small></div></div>
+    <div class="card"><div class="card-label">温度</div><div class="card-value"><span id="temp">--</span><small>°C</small></div></div>
+    <div class="card"><div class="card-label">端口 (up/总)</div><div class="card-value"><span id="up">--</span><small id="total">/--</small></div></div>
+  </section>
+
+  <section class="table-wrap">
+    <div class="table-head">
+      <h2>端口状态与实时流量</h2>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>端口</th><th>链路</th>
+          <th>RX</th><th>TX</th>
+        </tr>
+      </thead>
+      <tbody id="ports"></tbody>
+    </table>
+    <div id="empty" class="empty">暂无数据</div>
+  </section>
+
+  <section id="history-panel" class="history-panel hidden">
+    <div class="history-head">
+      <h2>端口历史 <span id="history-title" class="muted"></span></h2>
+      <div class="ranges" id="ranges">
+        <button data-seconds="1800">30m</button>
+        <button data-seconds="3600" class="active">1h</button>
+        <button data-seconds="21600">6h</button>
+        <button data-seconds="86400">24h</button>
+        <button data-seconds="604800">7d</button>
+      </div>
+    </div>
+    <div class="legend">
+      <span id="toggle-rx" class="legend-item toggle" role="button" tabindex="0" aria-pressed="true" title="显示/隐藏 RX"><i class="swatch rx"></i>RX</span>
+      <span id="toggle-tx" class="legend-item toggle" role="button" tabindex="0" aria-pressed="true" title="显示/隐藏 TX"><i class="swatch tx"></i>TX</span>
+      <span id="history-empty" class="muted"></span>
+    </div>
+    <div id="history-chart" class="chart"></div>
+  </section>
+
+  <script src="/static/history.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>
