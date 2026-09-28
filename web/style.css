@@ -44,6 +44,12 @@ body {
 .controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .auto { display: flex; align-items: center; gap: 6px; color: var(--muted); }
 
+@media (max-width: 720px) {
+  .topbar { flex-direction: column; align-items: stretch; gap: 10px; }
+  .title, .controls { flex: 1 1 auto; }
+  .updated { min-width: 0; }
+}
+
 select, button {
   background: var(--panel-2);
   color: var(--text);
@@ -62,7 +68,7 @@ button:hover { border-color: var(--accent); }
 .dot.ok { background: var(--up); box-shadow: 0 0 8px var(--up); }
 .dot.err { background: var(--danger); box-shadow: 0 0 8px var(--danger); }
 
-.updated { color: var(--muted); min-width: 150px; }
+.updated { color: var(--muted); min-width: 150px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 
 .alert {
   margin: 12px 22px 0;
