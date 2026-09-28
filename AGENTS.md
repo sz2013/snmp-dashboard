@@ -4,7 +4,7 @@ SNMP switch web dashboard. Pure-stdlib web server + vanilla JS frontend (no buil
 
 ## Setup / interpreter
 
-- Use the bundled venv: `.venv\Scripts\python.exe` (Python 3.10.6). Dependencies are pinned in `requirements.txt` (`pysnmp==7.1.29`); install with `.venv\Scripts\python.exe -m pip install -r requirements.txt`.
+- Use the bundled venv: `.venv\Scripts\python.exe` (Python 3.10.6). Dependencies are pinned in `requirements.txt` (`pysnmp==7.1.21`, the last release supporting Python 3.9); install with `.venv\Scripts\python.exe -m pip install -r requirements.txt`.
 - pysnmp 7.x async API is used everywhere: `pysnmp.hlapi.v3arch.asyncio`. `UdpTransportTarget.create(...)` is awaitable and `bulk_walk_cmd` is an async iterator — do not port snippets from older pysnmp tutorials.
 - SNMP v2c only (`mpModel=1`); defaults: host `192.168.10.1`, community `public`, port `161`.
 

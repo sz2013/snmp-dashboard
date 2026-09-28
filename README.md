@@ -11,8 +11,8 @@
 
 ## 环境要求
 
-- Python 3.10+
-- 仅依赖 `pysnmp==7.1.29`（见 `requirements.txt`）
+- Python 3.9+
+- 仅依赖 `pysnmp==7.1.21`（见 `requirements.txt`；最后一个支持 Python 3.9 的版本）
 - SNMP v2c，默认 host `192.168.10.1`、community `public`、port `161`
 
 ## 本地运行
