@@ -21,7 +21,7 @@
     const vis = { rx: !opts || opts.rx !== false, tx: !opts || opts.tx !== false };
 
     if (!series.length) {
-      if (empty) empty.textContent = "暂无历史数据（每分钟采样一次）";
+      if (empty) empty.textContent = "暂无历史数据";
       return;
     }
     if (empty) empty.textContent = "";

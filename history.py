@@ -1,7 +1,6 @@
 import os
 import sqlite3
 import threading
-import time
 
 _LOCAL = threading.local()
 DB_PATH = "history.db"
@@ -70,10 +69,7 @@ def last_name(port_idx):
     return row[0] if row else None
 
 
-def query(port_idx, since, points=300):
-    now = int(time.time())
-    span = max(1, now - since)
-    step = max(1, span // points)
+def query(port_idx, since, step=60):
     rows = _conn().execute(
         """
         SELECT (ts / ?) * ? AS bucket, AVG(rx_bps), AVG(tx_bps)

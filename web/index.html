@@ -57,17 +57,35 @@
     <div class="history-head">
       <h2>端口历史 <span id="history-title" class="muted"></span></h2>
       <div class="ranges" id="ranges">
-        <button data-seconds="1800">30m</button>
-        <button data-seconds="3600" class="active">1h</button>
+        <button data-seconds="1800" class="active">30m</button>
+        <button data-seconds="3600">1h</button>
         <button data-seconds="21600">6h</button>
-        <button data-seconds="86400">24h</button>
+        <button data-seconds="86400">1d</button>
+        <button data-seconds="172800">2d</button>
+        <button data-seconds="259200">3d</button>
+        <button data-seconds="345600">4d</button>
+        <button data-seconds="432000">5d</button>
+        <button data-seconds="518400">6d</button>
         <button data-seconds="604800">7d</button>
       </div>
+      <label class="sampling">采样率
+        <select id="resolution">
+          <option value="0" selected>自动</option>
+          <option value="60">1分钟</option>
+          <option value="120">2分钟</option>
+          <option value="300">5分钟</option>
+          <option value="600">10分钟</option>
+          <option value="900">15分钟</option>
+          <option value="1800">30分钟</option>
+          <option value="3600">1小时</option>
+        </select>
+      </label>
     </div>
     <div class="legend">
       <span id="toggle-rx" class="legend-item toggle" role="button" tabindex="0" aria-pressed="true" title="显示/隐藏 RX"><i class="swatch rx"></i>RX</span>
       <span id="toggle-tx" class="legend-item toggle" role="button" tabindex="0" aria-pressed="true" title="显示/隐藏 TX"><i class="swatch tx"></i>TX</span>
       <span id="history-empty" class="muted"></span>
+      <span id="history-info" class="muted"></span>
     </div>
     <div id="history-chart" class="chart"></div>
   </section>

@@ -21,11 +21,14 @@ const els = {
   toggleRx: document.getElementById("toggle-rx"),
   toggleTx: document.getElementById("toggle-tx"),
   ranges: document.getElementById("ranges"),
+  resolution: document.getElementById("resolution"),
+  historyInfo: document.getElementById("history-info"),
 };
 
 let timer = null;
 let selectedPort = null;
-let rangeSeconds = 3600;
+let rangeSeconds = 1800;
+let historyStep = 0;
 let latestPorts = [];
 let lastHistoryAt = 0;
 let lastHistory = null;
@@ -47,6 +50,13 @@ function operClass(oper) {
   if (oper === "up") return "up";
   if (oper === "down") return "down";
   return "other";
+}
+
+function fmtStep(sec) {
+  sec = Number(sec) || 60;
+  if (sec % 3600 === 0) return sec / 3600 + "小时";
+  if (sec % 60 === 0) return sec / 60 + "分钟";
+  return sec + "秒";
 }
 
 function renderPorts(ports) {
@@ -97,7 +107,8 @@ async function loadHistory(force) {
   lastHistoryAt = now;
   try {
     const res = await fetch(
-      "/api/history?port=" + encodeURIComponent(selectedPort) + "&seconds=" + rangeSeconds,
+      "/api/history?port=" + encodeURIComponent(selectedPort) +
+        "&seconds=" + rangeSeconds + "&step=" + historyStep,
       { cache: "no-store" }
     );
     const data = await res.json();
@@ -105,6 +116,8 @@ async function loadHistory(force) {
     els.historyTitle.textContent = current.name || data.name || "if" + selectedPort;
     lastHistory = data;
     window.renderHistoryChart(els.historyChart, data, human, { rx: showRx, tx: showTx });
+    const pts = (data.series || []).length;
+    els.historyInfo.textContent = pts ? "采样 " + fmtStep(data.step) + " · " + pts + " 点" : "";
   } catch (err) {
     els.historyEmpty.textContent = "加载历史失败：" + err.message;
   }
@@ -194,8 +207,22 @@ els.ranges.querySelectorAll("button").forEach((btn) => {
     loadHistory(true);
   });
 });
+els.resolution.addEventListener("change", () => {
+  historyStep = Number(els.resolution.value) || 0;
+  loadHistory(true);
+});
 bindToggle(els.toggleRx, "rx");
 bindToggle(els.toggleTx, "tx");
+
+let resizeTimer = null;
+window.addEventListener("resize", () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    if (lastHistory) {
+      window.renderHistoryChart(els.historyChart, lastHistory, human, { rx: showRx, tx: showTx });
+    }
+  }, 150);
+});
 
 load();
 schedule();

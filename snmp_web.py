@@ -28,6 +28,8 @@ SYS = {
 
 EXCLUDE_PORTS = re.compile(r"^(InLoopBack|NULL|Console|LoopBack|Tunnel|Virtual|Vlanif)", re.I)
 
+MAX_POINTS = 2000
+
 COL = {
     "name": "1.3.6.1.2.1.31.1.1.1.1",
     "oper": "1.3.6.1.2.1.2.2.1.8",
@@ -321,15 +323,24 @@ class Handler(BaseHTTPRequestHandler):
             seconds = 3600
         seconds = max(60, min(seconds, int(cfg.get("retain_days", 7) * 86400)))
         try:
-            series = history.query(port, int(time.time()) - seconds)
+            step = int(qs.get("step", ["0"])[0])
+        except ValueError:
+            step = 0
+        if step > 0:
+            step = max(1, min(step, seconds))
+        else:
+            step = max(60, seconds // MAX_POINTS)
+        try:
+            series = history.query(port, int(time.time()) - seconds, step)
             payload = {
                 "ok": True,
                 "port": port,
                 "name": history.last_name(port),
+                "step": step,
                 "series": series,
             }
         except Exception as exc:
-            payload = {"ok": False, "error": str(exc), "port": port, "series": []}
+            payload = {"ok": False, "error": str(exc), "port": port, "step": step, "series": []}
         self._send(200, json.dumps(payload), "application/json; charset=utf-8")
 
 
