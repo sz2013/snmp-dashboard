@@ -72,9 +72,11 @@ CACHE = {"data": None}
 CACHE_LOCK = threading.Lock()
 HEALTH_INDEX = {}
 HEALTH_RESOLVED = False
+HEALTH_RETRY_AT = 0.0
 STOP = threading.Event()
 ACC = {}
 ACC_LOCK = threading.Lock()
+RT = {}
 
 
 async def get_many(engine, auth, target, context, oids):
@@ -84,6 +86,7 @@ async def get_many(engine, auth, target, context, oids):
         target,
         context,
         *[ObjectType(ObjectIdentity(oid)) for oid in oids],
+        lookupMib=False,
     )
     if err or status:
         raise RuntimeError(str(err) if err else f"{status.prettyPrint()}")
@@ -93,7 +96,7 @@ async def get_many(engine, auth, target, context, oids):
 async def walk_column(engine, auth, target, context, oid):
     out = {}
     async for err, status, _index, varBinds in bulk_walk_cmd(
-        engine, auth, target, context, 0, 25, ObjectType(ObjectIdentity(oid))
+        engine, auth, target, context, 0, 25, ObjectType(ObjectIdentity(oid)), lookupMib=False
     ):
         if err or status:
             break
@@ -130,15 +133,11 @@ def fmt_uptime(value):
     return f"{days}天 {clock}" if days else clock
 
 
-async def collect(host, community, port):
-    global HEALTH_RESOLVED
+async def collect(engine, auth, context, target):
+    global HEALTH_RESOLVED, HEALTH_RETRY_AT
 
-    engine = SnmpEngine()
-    auth = CommunityData(community, mpModel=1)
-    context = ContextData()
-    target = await UdpTransportTarget.create((host, port), timeout=2, retries=1)
-
-    resolving = not (HEALTH_RESOLVED and HEALTH_INDEX)
+    now = time.monotonic()
+    resolving = (not HEALTH_RESOLVED) or (not HEALTH_INDEX and now >= HEALTH_RETRY_AT)
     health_task = resolve_health(engine, auth, target, context) if resolving else read_health(
         engine, auth, target, context
     )
@@ -167,6 +166,8 @@ async def collect(host, community, port):
             resolved, health = health_res
             HEALTH_INDEX.update(resolved)
             HEALTH_RESOLVED = True
+            if not resolved:
+                HEALTH_RETRY_AT = time.monotonic() + 300
         else:
             health = health_res
 
@@ -210,9 +211,15 @@ async def read_health(engine, auth, target, context):
     return out
 
 
-def build_payload(host, community, port):
+def build_payload(rt, cfg):
     try:
-        system, ports_raw, health = asyncio.run(collect(host, community, port))
+        if rt.get("target") is None:
+            rt["target"] = rt["loop"].run_until_complete(
+                UdpTransportTarget.create((cfg["host"], cfg["port"]), timeout=2, retries=1)
+            )
+        system, ports_raw, health = rt["loop"].run_until_complete(
+            collect(rt["engine"], rt["auth"], rt["context"], rt["target"])
+        )
     except Exception as exc:
         return {"ok": False, "error": str(exc), "ts": time.time()}
 
@@ -252,7 +259,7 @@ def build_payload(host, community, port):
     return {
         "ok": True,
         "ts": time.time(),
-        "host": host,
+        "host": cfg["host"],
         "system": {**system, "sysUpTime": fmt_uptime(system.get("sysUpTime"))},
         "health": health,
         "counts": {"up": up, "total": len(result)},
@@ -379,11 +386,23 @@ def flush(ts):
 
 
 def poll_loop(cfg):
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    RT.update(
+        {
+            "loop": loop,
+            "engine": SnmpEngine(),
+            "auth": CommunityData(cfg["community"], mpModel=1),
+            "context": ContextData(),
+            "target": None,
+        }
+    )
+
     last_record = time.monotonic()
     last_prune = time.monotonic()
     while not STOP.is_set():
         start = time.monotonic()
-        payload = build_payload(cfg["host"], cfg["community"], cfg["port"])
+        payload = build_payload(RT, cfg)
         with CACHE_LOCK:
             CACHE["data"] = payload
         if payload.get("ok"):
@@ -449,6 +468,18 @@ def main():
         STOP.set()
         poll_thread.join(timeout=5)
         flush(time.time())
+        engine = RT.get("engine")
+        if engine is not None:
+            try:
+                engine.close_dispatcher()
+            except Exception:
+                pass
+        loop = RT.get("loop")
+        if loop is not None:
+            try:
+                loop.close()
+            except Exception:
+                pass
         server.server_close()
 
 
