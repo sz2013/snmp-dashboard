@@ -78,6 +78,10 @@ STOP = threading.Event()
 ACC = {}
 ACC_LOCK = threading.Lock()
 RT = {}
+INVENTORY = {}
+INVENTORY_AT = 0.0
+INVENTORY_INTERVAL = 300.0
+GET_CHUNK = 16
 
 
 async def get_many(engine, auth, target, context, oids):
@@ -134,24 +138,76 @@ def fmt_uptime(value):
     return f"{days}天 {clock}" if days else clock
 
 
+async def get_many_chunked(engine, auth, target, context, oids):
+    values = {}
+    ok = True
+    for i in range(0, len(oids), GET_CHUNK):
+        try:
+            values.update(await get_many(engine, auth, target, context, oids[i : i + GET_CHUNK]))
+        except Exception:
+            ok = False
+    return values, ok
+
+
+def poll_oids():
+    oids = []
+    for field in ("oper", "in", "out"):
+        base = COL[field]
+        oids += [f"{base}.{idx}" for idx in INVENTORY.get(field, ())]
+    return oids
+
+
+def targeted_cols(values):
+    cols = {}
+    for field in ("oper", "in", "out"):
+        base = COL[field]
+        col = {}
+        for idx in INVENTORY.get(field, ()):
+            value = values.get(f"{base}.{idx}")
+            if value is not None:
+                col[idx] = value
+        cols[field] = col
+    return cols
+
+
+def merge_cols(cols):
+    ports = {}
+    for field, col in cols.items():
+        for idx, value in col.items():
+            ports.setdefault(idx, {})[field] = value
+    return ports
+
+
+def update_inventory(cols):
+    INVENTORY.clear()
+    for field in ("oper", "in", "out"):
+        keep = []
+        for idx in cols.get(field, {}):
+            if EXCLUDE_PORTS.match(NAMES.get(idx, f"if{idx}")):
+                continue
+            keep.append(idx)
+        INVENTORY[field] = sorted(keep, key=lambda x: int(x) if str(x).isdigit() else 0)
+
+
 async def collect(engine, auth, context, target):
-    global HEALTH_RESOLVED, HEALTH_RETRY_AT
+    global HEALTH_RESOLVED, HEALTH_RETRY_AT, INVENTORY_AT
 
     now = time.monotonic()
     resolving = (not HEALTH_RESOLVED) or (not HEALTH_INDEX and now >= HEALTH_RETRY_AT)
+    refresh = (not INVENTORY) or (now - INVENTORY_AT >= INVENTORY_INTERVAL)
 
-    fields = [(k, oid) for k, oid in COL.items() if k != "name"]
     health_oids = {m: HEALTH_INDEX[m] for m in HEALTH_INDEX}
     scalar_oids = list(SYS.values()) + ([] if resolving else list(health_oids.values()))
 
     tasks = [get_many(engine, auth, target, context, scalar_oids)]
     if resolving:
         tasks.append(resolve_health(engine, auth, target, context))
-    walk_at = len(tasks)
-    tasks += [walk_column(engine, auth, target, context, oid) for _, oid in fields]
-    name_at = len(tasks)
-    if not NAMES:
-        tasks.append(walk_column(engine, auth, target, context, COL["name"]))
+    base = len(tasks)
+
+    if refresh:
+        tasks += [walk_column(engine, auth, target, context, oid) for _, oid in COL.items()]
+    else:
+        tasks.append(get_many_chunked(engine, auth, target, context, poll_oids()))
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -175,20 +231,27 @@ async def collect(engine, auth, context, target):
             if num is not None:
                 health[metric] = num
 
-    ports = {}
-    for (field, _), res in zip(fields, results[walk_at:name_at]):
+    if refresh:
+        cols = {}
+        for (field, _), res in zip(COL.items(), results[base:]):
+            if isinstance(res, Exception):
+                continue
+            cols[field] = res
+        if "name" in cols:
+            NAMES.update(cols["name"])
+        update_inventory(cols)
+        INVENTORY_AT = now if cols else 0.0
+        ports = merge_cols({k: v for k, v in cols.items() if k != "name"})
+    else:
+        res = results[base]
         if isinstance(res, Exception):
-            continue
-        for idx, value in res.items():
-            ports.setdefault(idx, {})[field] = value
-
-    if not NAMES:
-        name_res = results[name_at]
-        if not isinstance(name_res, Exception):
-            NAMES.update(name_res)
-
-    if ports and any(idx not in NAMES for idx in ports):
-        NAMES.update(await walk_column(engine, auth, target, context, COL["name"]))
+            INVENTORY_AT = 0.0
+            ports = {}
+        else:
+            values, ok = res
+            if not ok:
+                INVENTORY_AT = 0.0
+            ports = merge_cols(targeted_cols(values))
 
     return system, ports, health
 
