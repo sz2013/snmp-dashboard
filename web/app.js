@@ -8,8 +8,6 @@ const els = {
   cpu: document.getElementById("cpu"),
   mem: document.getElementById("mem"),
   temp: document.getElementById("temp"),
-  up: document.getElementById("up"),
-  total: document.getElementById("total"),
   sysUpTime: document.getElementById("sysUpTime"),
   ports: document.getElementById("ports"),
   empty: document.getElementById("empty"),
@@ -159,8 +157,6 @@ function render(data) {
   setText(els.cpu, h.cpu);
   setText(els.mem, h.mem);
   setText(els.temp, h.temp);
-  setText(els.up, data.counts.up);
-  setText(els.total, "/" + data.counts.total);
 
   const s = data.system || {};
   setText(els.sysUpTime, s.sysUpTime);

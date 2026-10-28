@@ -66,21 +66,27 @@ HEALTH = {
 }
 
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
-LOCK = threading.Lock()
-STATE = {"prev": {}, "ts": None}
 CACHE = {"data": None}
 CACHE_LOCK = threading.Lock()
 HEALTH_INDEX = {}
 HEALTH_RESOLVED = False
 HEALTH_RETRY_AT = 0.0
+HEALTH_VALUES = {}
+HEALTH_AT = 0.0
+HEALTH_INTERVAL = 60.0
 NAMES = {}
 STOP = threading.Event()
 ACC = {}
 ACC_LOCK = threading.Lock()
 RT = {}
-INVENTORY = {}
-INVENTORY_AT = 0.0
-INVENTORY_INTERVAL = 300.0
+PORTS = []
+PORTS_AT = 0.0
+PORTS_INTERVAL = 300.0
+UP_PORTS = set()
+OPER_STATE = {}
+DOWN_AT = 0.0
+DOWN_INTERVAL = 10.0
+COUNTERS = {}
 GET_CHUNK = 16
 
 
@@ -149,65 +155,98 @@ async def get_many_chunked(engine, auth, target, context, oids):
     return values, ok
 
 
-def poll_oids():
+def if_key(idx):
+    return int(idx) if str(idx).isdigit() else 0
+
+
+def targeted_oids(now):
+    down_due = now - DOWN_AT >= DOWN_INTERVAL
+    oper_idx = set(UP_PORTS)
+    if down_due:
+        oper_idx.update(PORTS)
+    counter_idx = set(UP_PORTS)
+    oids = [f"{COL['oper']}.{idx}" for idx in sorted(oper_idx, key=if_key)]
+    for field in ("in", "out"):
+        oids.extend(f"{COL[field]}.{idx}" for idx in sorted(counter_idx, key=if_key))
+    return oper_idx, counter_idx, down_due, oids
+
+
+def counter_rates(values, idxs, sample_at):
+    rates = {}
+    for idx in idxs:
+        raw_in = values.get(f"{COL['in']}.{idx}")
+        raw_out = values.get(f"{COL['out']}.{idx}")
+        if raw_in is None or raw_out is None:
+            rates[idx] = (0.0, 0.0)
+            continue
+        try:
+            cur_in = int(raw_in)
+            cur_out = int(raw_out)
+        except (TypeError, ValueError):
+            rates[idx] = (0.0, 0.0)
+            continue
+        rx = tx = 0.0
+        prev = COUNTERS.get(idx)
+        if prev:
+            dt = sample_at - prev["ts"]
+            if dt > 0:
+                rx = max(0.0, (cur_in - prev["in"]) * 8 / dt)
+                tx = max(0.0, (cur_out - prev["out"]) * 8 / dt)
+        COUNTERS[idx] = {"in": cur_in, "out": cur_out, "ts": sample_at}
+        rates[idx] = (rx, tx)
+    return rates
+
+
+def port_rows(rates):
+    rows = []
+    for idx in PORTS:
+        oper_code = str(OPER_STATE.get(idx, ""))
+        rx, tx = rates.get(idx, (0.0, 0.0))
+        rows.append(
+            {
+                "idx": idx,
+                "name": NAMES.get(idx, f"if{idx}"),
+                "oper": OPER.get(oper_code, oper_code or "unknown"),
+                "rx_bps": round(rx, 1),
+                "tx_bps": round(tx, 1),
+            }
+        )
+    return rows
+
+
+def counter_oids(idxs):
     oids = []
-    for field in ("oper", "in", "out"):
-        base = COL[field]
-        oids += [f"{base}.{idx}" for idx in INVENTORY.get(field, ())]
+    for field in ("in", "out"):
+        oids.extend(f"{COL[field]}.{idx}" for idx in sorted(idxs, key=if_key))
     return oids
 
 
-def targeted_cols(values):
-    cols = {}
-    for field in ("oper", "in", "out"):
-        base = COL[field]
-        col = {}
-        for idx in INVENTORY.get(field, ()):
-            value = values.get(f"{base}.{idx}")
-            if value is not None:
-                col[idx] = value
-        cols[field] = col
-    return cols
-
-
-def merge_cols(cols):
-    ports = {}
-    for field, col in cols.items():
-        for idx, value in col.items():
-            ports.setdefault(idx, {})[field] = value
-    return ports
-
-
-def update_inventory(cols):
-    INVENTORY.clear()
-    for field in ("oper", "in", "out"):
-        keep = []
-        for idx in cols.get(field, {}):
-            if EXCLUDE_PORTS.match(NAMES.get(idx, f"if{idx}")):
-                continue
-            keep.append(idx)
-        INVENTORY[field] = sorted(keep, key=lambda x: int(x) if str(x).isdigit() else 0)
-
-
 async def collect(engine, auth, context, target):
-    global HEALTH_RESOLVED, HEALTH_RETRY_AT, INVENTORY_AT
+    global HEALTH_RESOLVED, HEALTH_RETRY_AT, HEALTH_AT, PORTS, PORTS_AT, UP_PORTS, DOWN_AT
 
     now = time.monotonic()
     resolving = (not HEALTH_RESOLVED) or (not HEALTH_INDEX and now >= HEALTH_RETRY_AT)
-    refresh = (not INVENTORY) or (now - INVENTORY_AT >= INVENTORY_INTERVAL)
+    refresh = (not PORTS) or (now - PORTS_AT >= PORTS_INTERVAL)
+    health_due = resolving or (now - HEALTH_AT >= HEALTH_INTERVAL)
 
-    health_oids = {m: HEALTH_INDEX[m] for m in HEALTH_INDEX}
-    scalar_oids = list(SYS.values()) + ([] if resolving else list(health_oids.values()))
+    scalar_oids = list(SYS.values())
+    if health_due and not resolving:
+        scalar_oids += list(HEALTH_INDEX.values())
 
     tasks = [get_many(engine, auth, target, context, scalar_oids)]
     if resolving:
         tasks.append(resolve_health(engine, auth, target, context))
     base = len(tasks)
 
+    oper_idx = set()
+    counter_idx = set()
+    down_due = False
     if refresh:
-        tasks += [walk_column(engine, auth, target, context, oid) for _, oid in COL.items()]
+        tasks.append(walk_column(engine, auth, target, context, COL["name"]))
+        tasks.append(walk_column(engine, auth, target, context, COL["oper"]))
     else:
-        tasks.append(get_many_chunked(engine, auth, target, context, poll_oids()))
+        oper_idx, counter_idx, down_due, oids = targeted_oids(now)
+        tasks.append(get_many_chunked(engine, auth, target, context, oids))
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -216,44 +255,71 @@ async def collect(engine, auth, context, target):
         raise raw
     system = {label: raw.get(oid) for label, oid in SYS.items()}
 
-    health = {}
     if resolving:
         health_res = results[1]
         if not isinstance(health_res, Exception):
-            resolved, health = health_res
+            resolved, values = health_res
             HEALTH_INDEX.update(resolved)
             HEALTH_RESOLVED = True
+            HEALTH_VALUES.update(values)
+            HEALTH_AT = now
             if not resolved:
                 HEALTH_RETRY_AT = time.monotonic() + 300
-    else:
-        for metric, oid in health_oids.items():
+    elif health_due:
+        for metric, oid in HEALTH_INDEX.items():
             num = to_number(raw.get(oid))
             if num is not None:
-                health[metric] = num
+                HEALTH_VALUES[metric] = num
+        HEALTH_AT = now
 
     if refresh:
-        cols = {}
-        for (field, _), res in zip(COL.items(), results[base:]):
-            if isinstance(res, Exception):
-                continue
-            cols[field] = res
-        if "name" in cols:
-            NAMES.update(cols["name"])
-        update_inventory(cols)
-        INVENTORY_AT = now if cols else 0.0
-        ports = merge_cols({k: v for k, v in cols.items() if k != "name"})
+        name_res = results[base]
+        oper_res = results[base + 1]
+        if isinstance(name_res, dict):
+            NAMES.update(name_res)
+        if isinstance(oper_res, dict) and oper_res:
+            keep = [
+                idx
+                for idx in sorted(oper_res, key=if_key)
+                if not EXCLUDE_PORTS.match(NAMES.get(idx, f"if{idx}"))
+            ]
+            PORTS = keep
+            OPER_STATE.clear()
+            for idx in keep:
+                OPER_STATE[idx] = oper_res[idx]
+            PORTS_AT = now
+            DOWN_AT = now
+        else:
+            PORTS_AT = 0.0
+        UP_PORTS = {idx for idx in PORTS if OPER_STATE.get(idx) == "1"}
+        counter_idx = set(UP_PORTS)
+        values = {}
+        if counter_idx:
+            values, _ = await get_many_chunked(
+                engine, auth, target, context, counter_oids(counter_idx)
+            )
+        sample_at = time.monotonic()
     else:
         res = results[base]
         if isinstance(res, Exception):
-            INVENTORY_AT = 0.0
-            ports = {}
+            values, ok = {}, False
         else:
             values, ok = res
-            if not ok:
-                INVENTORY_AT = 0.0
-            ports = merge_cols(targeted_cols(values))
+        sample_at = time.monotonic()
+        for idx in oper_idx:
+            value = values.get(f"{COL['oper']}.{idx}")
+            if value is not None:
+                OPER_STATE[idx] = value
+        if down_due:
+            DOWN_AT = now if ok else 0.0
+        UP_PORTS = {idx for idx in PORTS if OPER_STATE.get(idx) == "1"}
 
-    return system, ports, health
+    rates = counter_rates(values, counter_idx, sample_at)
+    for idx in list(COUNTERS):
+        if idx not in UP_PORTS:
+            del COUNTERS[idx]
+
+    return system, port_rows(rates), dict(HEALTH_VALUES)
 
 
 async def resolve_health(engine, auth, target, context):
@@ -285,53 +351,20 @@ def build_payload(rt, cfg):
             rt["target"] = rt["loop"].run_until_complete(
                 UdpTransportTarget.create((cfg["host"], cfg["port"]), timeout=2, retries=1)
             )
-        system, ports_raw, health = rt["loop"].run_until_complete(
+        system, ports, health = rt["loop"].run_until_complete(
             collect(rt["engine"], rt["auth"], rt["context"], rt["target"])
         )
     except Exception as exc:
         return {"ok": False, "error": str(exc), "ts": time.time()}
 
-    now = time.monotonic()
-    with LOCK:
-        prev = STATE["prev"]
-        prev_ts = STATE["ts"]
-        dt = (now - prev_ts) if prev_ts else None
-        result = []
-        for idx, row in ports_raw.items():
-            name = NAMES.get(idx, f"if{idx}")
-            if EXCLUDE_PORTS.match(name):
-                continue
-            oper_code = str(row.get("oper", ""))
-            rx = tx = 0.0
-            old = prev.get(idx)
-            if old and dt and dt > 0:
-                try:
-                    rx = max(0.0, (int(row.get("in", 0)) - int(old.get("in", 0))) * 8 / dt)
-                    tx = max(0.0, (int(row.get("out", 0)) - int(old.get("out", 0))) * 8 / dt)
-                except (TypeError, ValueError):
-                    pass
-            result.append(
-                {
-                    "idx": idx,
-                    "name": name,
-                    "oper": OPER.get(oper_code, oper_code or "unknown"),
-                    "rx_bps": round(rx, 1),
-                    "tx_bps": round(tx, 1),
-                }
-            )
-        STATE["prev"] = ports_raw
-        STATE["ts"] = now
-
-    result.sort(key=lambda r: int(r["idx"]) if str(r["idx"]).isdigit() else 0)
-    up = sum(1 for r in result if r["oper"] == "up")
+    ports.sort(key=lambda r: if_key(r["idx"]))
     return {
         "ok": True,
         "ts": time.time(),
         "host": cfg["host"],
         "system": {**system, "sysUpTime": fmt_uptime(system.get("sysUpTime"))},
         "health": health,
-        "counts": {"up": up, "total": len(result)},
-        "ports": result,
+        "ports": ports,
     }
 
 
